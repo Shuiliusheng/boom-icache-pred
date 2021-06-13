@@ -174,13 +174,13 @@ class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
   val s2_pred_correct = RegNext(s1_pred_correct)
   s1_pred_correct := io.s1_paddr(13, 12) === s1_vaddr(13, 12)
 
-  when(s0_vaddr(31, 20) =/= 0.U){
-    printf("icache cycles: %d, s0_valid: %d, s0_addr: 0x%x, s1_valid: %d, s1_addr: 0x%x\n", debug_cycles.value, s0_valid, s0_vaddr, s1_valid, s1_vaddr)
-  }
+  // when(s0_vaddr(31, 20) =/= 0.U){
+  //   printf("icache cycles: %d, s0_valid: %d, s0_addr: 0x%x, s1_valid: %d, s1_addr: 0x%x\n", debug_cycles.value, s0_valid, s0_vaddr, s1_valid, s1_vaddr)
+  // }
 
-  when((s0_vaddr(31, 20) =/= 0.U) && !s1_hit){
-    printf("icache pred cycles: %d, pred: %d, hit: %d, valid: %d, vaddr: 0x%x, paddr: 0x%x\n", debug_cycles.value, s1_pred_correct, s1_hit, s1_valid, s1_vaddr, io.s1_paddr)
-  }
+  // when((s0_vaddr(31, 20) =/= 0.U) && !s1_hit){
+  //   printf("icache pred cycles: %d, pred: %d, hit: %d, valid: %d, vaddr: 0x%x, paddr: 0x%x\n", debug_cycles.value, s1_pred_correct, s1_hit, s1_valid, s1_vaddr, io.s1_paddr)
+  // }
 
   val s2_valid = RegNext(s1_valid && !io.s1_kill)
   val s2_hit = RegNext(s1_hit)
@@ -191,7 +191,7 @@ class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
   val s2_miss = s2_valid && (!s2_hit && s2_pred_correct) && !RegNext(refill_valid) 
   //val s2_miss = s2_valid && !s2_hit && !RegNext(refill_valid)
 
-  val miss = s2_valid && !s2_hit && !RegNext(refill_valid)
+  // val miss = s2_valid && !s2_hit && !RegNext(refill_valid)
   // when(miss){
   //   printf("icache miss cycle: %d, pred_correct: %d %d, s1_paddr: 0x%x, s1_vaddr: 0x%x\n", debug_cycles.value, s1_pred_correct, s2_pred_correct, RegNext(io.s1_paddr), RegNext(s1_vaddr))
   // }
@@ -240,12 +240,12 @@ class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
     val tag = tag_rdata(i)
     s1_tag_hit(i) := s1_vb && tag === s1_tag
   }
-  when(!(PopCount(s1_tag_hit) <= 1.U || !s1_valid)){
-    printf("s1vaddr: 0x%x, idx: 0x%x, s1_tag: 0x%x, idx: 0x%x, %d, %d\n", s1_vaddr, s1_vaddr(untagBits-1,blockOffBits), io.s1_paddr(tag_hi, tag_lo), io.s1_paddr(untagBits-1,blockOffBits), tag_hi.U, tag_lo.U)
-    for (i <- 0 until nWays) {
-      printf("tag %d : 0x%x\n", i.U, tag_rdata(i))
-    }
-  }
+  // when(!(PopCount(s1_tag_hit) <= 1.U || !s1_valid)){
+  //   printf("s1vaddr: 0x%x, idx: 0x%x, s1_tag: 0x%x, idx: 0x%x, %d, %d\n", s1_vaddr, s1_vaddr(untagBits-1,blockOffBits), io.s1_paddr(tag_hi, tag_lo), io.s1_paddr(untagBits-1,blockOffBits), tag_hi.U, tag_lo.U)
+  //   for (i <- 0 until nWays) {
+  //     printf("tag %d : 0x%x\n", i.U, tag_rdata(i))
+  //   }
+  // }
   //assert(PopCount(s1_tag_hit) <= 1.U || !s1_valid)
 
   val ramDepth = if (refillsToOneBank && nBanks == 2) {
