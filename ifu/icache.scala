@@ -120,6 +120,7 @@ object GetPropertyByHartId
 }
 
 
+
 /**
  * Main ICache module
  *
@@ -127,6 +128,318 @@ object GetPropertyByHartId
  */
 @chiselName
 class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
+  with HasBoomFrontendParameters
+{
+  val enableICacheDelay = tileParams.core.asInstanceOf[BoomCoreParams].enableICacheDelay
+  val io = IO(new ICacheBundle(outer))
+
+  val (tl_out, edge_out) = outer.masterNode.out(0)
+
+  require(isPow2(nSets) && isPow2(nWays))
+  require(usingVM)
+  //require(pgIdxBits >= untagBits)
+
+  // How many bits do we intend to fetch at most every cycle?
+  val wordBits = outer.icacheParams.fetchBytes*8
+  // Each of these cases require some special-case handling.
+  require (tl_out.d.bits.data.getWidth == wordBits || (2*tl_out.d.bits.data.getWidth == wordBits && nBanks == 2))
+  // If TL refill is half the wordBits size and we have two banks, then the
+  // refill writes to only one bank per cycle (instead of across two banks every
+  // cycle).
+  val refillsToOneBank = (2*tl_out.d.bits.data.getWidth == wordBits)
+
+  //pgIdxBits = 12
+  //def untagBits = blockOffBits + idxBits
+  //def idxBits = log2Up(cacheParams.nSets)
+  //def tagBits = tlBundleParams.addressBits - pgUntagBits
+  //def pgUntagBits = if (usingVM) untagBits min pgIdxBits else untagBits
+
+  val is_pipt = (idxBits + blockOffBits) > pgIdxBits
+  val tag_hi = if(is_pipt) tlBundleParams.addressBits-1 else tagBits+untagBits-1  
+  val tag_lo = if(is_pipt) pgIdxBits else untagBits
+  val tag_bits = if(is_pipt) tlBundleParams.addressBits - pgIdxBits else tlBundleParams.addressBits - pgUntagBits
+
+  //debug
+  val debug_cycles = freechips.rocketchip.util.WideCounter(32)
+
+  val s0_valid = io.req.fire()
+  val s0_vaddr = io.req.bits.addr
+
+  val s1_valid = RegNext(s0_valid)
+  val s1_vaddr = RegNext(s0_vaddr)
+  val s1_tag_hit = Wire(Vec(nWays, Bool()))
+  val s1_hit = s1_tag_hit.reduce(_||_)
+
+  val s1_pred_correct = Wire(Bool())
+  val s2_pred_correct = RegNext(s1_pred_correct)
+  s1_pred_correct := io.s1_paddr(13, 12) === s1_vaddr(13, 12)
+
+  when(s0_vaddr(31, 20) =/= 0.U){
+    printf("icache cycles: %d, s0_valid: %d, s0_addr: 0x%x, s1_valid: %d, s1_addr: 0x%x\n", debug_cycles.value, s0_valid, s0_vaddr, s1_valid, s1_vaddr)
+  }
+
+  when((s0_vaddr(31, 20) =/= 0.U) && !s1_hit){
+    printf("icache pred cycles: %d, pred: %d, hit: %d, valid: %d, vaddr: 0x%x, paddr: 0x%x\n", debug_cycles.value, s1_pred_correct, s1_hit, s1_valid, s1_vaddr, io.s1_paddr)
+  }
+
+  val s2_valid = RegNext(s1_valid && !io.s1_kill)
+  val s2_hit = RegNext(s1_hit)
+
+  val invalidated = Reg(Bool())
+  val refill_valid = RegInit(false.B)
+  val refill_fire = tl_out.a.fire()
+  val s2_miss = s2_valid && (!s2_hit && s2_pred_correct) && !RegNext(refill_valid) 
+  //val s2_miss = s2_valid && !s2_hit && !RegNext(refill_valid)
+
+  val miss = s2_valid && !s2_hit && !RegNext(refill_valid)
+  // when(miss){
+  //   printf("icache miss cycle: %d, pred_correct: %d %d, s1_paddr: 0x%x, s1_vaddr: 0x%x\n", debug_cycles.value, s1_pred_correct, s2_pred_correct, RegNext(io.s1_paddr), RegNext(s1_vaddr))
+  // }
+
+  val refill_paddr = RegEnable(io.s1_paddr, s1_valid && !(refill_valid || s2_miss))
+  //val refill_tag = refill_paddr(tagBits+untagBits-1,untagBits)
+  val refill_tag = refill_paddr(tag_hi,tag_lo)
+  val refill_idx = refill_paddr(untagBits-1,blockOffBits)
+  val refill_one_beat = tl_out.d.fire() && edge_out.hasData(tl_out.d.bits)
+
+  io.req.ready := !refill_one_beat
+
+  val (_, _, d_done, refill_cnt) = edge_out.count(tl_out.d)
+  val refill_done = refill_one_beat && d_done
+  tl_out.d.ready := true.B
+  require (edge_out.manager.minLatency > 0)
+
+  val repl_way = if (isDM) 0.U else LFSR(16, refill_fire)(log2Ceil(nWays)-1,0)
+
+  //val tag_array = SyncReadMem(nSets, Vec(nWays, UInt(tagBits.W)))
+  val tag_array = SyncReadMem(nSets, Vec(nWays, UInt(tag_bits.W)))
+  val tag_rdata = tag_array.read(s0_vaddr(untagBits-1, blockOffBits), !refill_done && s0_valid)
+  when (refill_done) {
+    tag_array.write(refill_idx, VecInit(Seq.fill(nWays)(refill_tag)), Seq.tabulate(nWays)(repl_way === _.U))
+   // printf("write icache cycles: %d,  idx: 0x%x, tag: 0x%x\n", debug_cycles.value, refill_idx, refill_tag)
+  }
+
+  val vb_array = RegInit(0.U((nSets*nWays).W))
+  when (refill_one_beat) {
+    vb_array := vb_array.bitSet(Cat(repl_way, refill_idx), refill_done && !invalidated)
+  }
+
+  when (io.invalidate) {
+    vb_array := 0.U
+    invalidated := true.B
+  }
+
+  val s2_dout   = Wire(Vec(nWays, UInt(wordBits.W)))
+  val s1_bankid = Wire(Bool())
+
+  for (i <- 0 until nWays) {
+    //val s1_idx = io.s1_paddr(untagBits-1,blockOffBits)
+    val s1_idx = s1_vaddr(untagBits-1,blockOffBits)
+    val s1_tag = io.s1_paddr(tag_hi, tag_lo)
+    val s1_vb = vb_array(Cat(i.U, s1_idx))
+    val tag = tag_rdata(i)
+    s1_tag_hit(i) := s1_vb && tag === s1_tag
+  }
+  when(!(PopCount(s1_tag_hit) <= 1.U || !s1_valid)){
+    printf("s1vaddr: 0x%x, idx: 0x%x, s1_tag: 0x%x, idx: 0x%x, %d, %d\n", s1_vaddr, s1_vaddr(untagBits-1,blockOffBits), io.s1_paddr(tag_hi, tag_lo), io.s1_paddr(untagBits-1,blockOffBits), tag_hi.U, tag_lo.U)
+    for (i <- 0 until nWays) {
+      printf("tag %d : 0x%x\n", i.U, tag_rdata(i))
+    }
+  }
+  //assert(PopCount(s1_tag_hit) <= 1.U || !s1_valid)
+
+  val ramDepth = if (refillsToOneBank && nBanks == 2) {
+    nSets * refillCycles / 2
+  } else {
+    nSets * refillCycles
+  }
+
+  val dataArrays = if (nBanks == 1) {
+    // Use unbanked icache for narrow accesses.
+    (0 until nWays).map { x =>
+      DescribedSRAM(
+        name = s"dataArrayWay_${x}",
+        desc = "ICache Data Array",
+        size = nSets * refillCycles,
+        data = UInt((wordBits).W)
+      )
+    }
+  } else {
+    // Use two banks, interleaved.
+    (0 until nWays).map { x =>
+      DescribedSRAM(
+        name = s"dataArrayB0Way_${x}",
+        desc = "ICache Data Array",
+        size = nSets * refillCycles,
+        data = UInt((wordBits/nBanks).W)
+      )} ++
+    (0 until nWays).map { x =>
+      DescribedSRAM(
+        name = s"dataArrayB1Way_${x}",
+        desc = "ICache Data Array",
+        size = nSets * refillCycles,
+        data = UInt((wordBits/nBanks).W)
+      )}
+  }
+  if (nBanks == 1) {
+    // Use unbanked icache for narrow accesses.
+    s1_bankid := 0.U
+    for ((dataArray, i) <- dataArrays.map(_._1) zipWithIndex) {
+      def row(addr: UInt) = addr(untagBits-1, blockOffBits-log2Ceil(refillCycles))
+      val s0_ren = s0_valid
+
+      val wen = (refill_one_beat && !invalidated) && repl_way === i.U
+
+      val mem_idx = Mux(refill_one_beat, (refill_idx << log2Ceil(refillCycles)) | refill_cnt,
+                    row(s0_vaddr))
+      when (wen) {
+        dataArray.write(mem_idx, tl_out.d.bits.data)
+      }
+      if (enableICacheDelay)
+        s2_dout(i) := dataArray.read(RegNext(mem_idx), RegNext(!wen && s0_ren))
+      else
+        s2_dout(i) := RegNext(dataArray.read(mem_idx, !wen && s0_ren))
+    }
+  } else {
+    // Use two banks, interleaved.
+    val dataArraysB0 = dataArrays.map(_._1).take(nWays)
+    val dataArraysB1 = dataArrays.map(_._1).drop(nWays)
+    require (nBanks == 2)
+
+    // Bank0 row's id wraps around if Bank1 is the starting bank.
+    def b0Row(addr: UInt) =
+      if (refillsToOneBank) {
+        addr(untagBits-1, blockOffBits-log2Ceil(refillCycles)+1) + bank(addr)
+      } else {
+        addr(untagBits-1, blockOffBits-log2Ceil(refillCycles)) + bank(addr)
+      }
+    // Bank1 row's id stays the same regardless of which Bank has the fetch address.
+    def b1Row(addr: UInt) =
+      if (refillsToOneBank) {
+        addr(untagBits-1, blockOffBits-log2Ceil(refillCycles)+1)
+      } else {
+        addr(untagBits-1, blockOffBits-log2Ceil(refillCycles))
+      }
+
+    s1_bankid := RegNext(bank(s0_vaddr))
+
+    for (i <- 0 until nWays) {
+      val s0_ren = s0_valid
+      val wen = (refill_one_beat && !invalidated)&& repl_way === i.U
+
+      var mem_idx0: UInt = null
+      var mem_idx1: UInt = null
+
+      if (refillsToOneBank) {
+        // write a refill beat across only one beat.
+        mem_idx0 =
+          Mux(refill_one_beat, (refill_idx << (log2Ceil(refillCycles)-1)) | (refill_cnt >> 1.U),
+          b0Row(s0_vaddr))
+        mem_idx1 =
+          Mux(refill_one_beat, (refill_idx << (log2Ceil(refillCycles)-1)) | (refill_cnt >> 1.U),
+          b1Row(s0_vaddr))
+
+        when (wen && refill_cnt(0) === 0.U) {
+          dataArraysB0(i).write(mem_idx0, tl_out.d.bits.data)
+        }
+        when (wen && refill_cnt(0) === 1.U) {
+          dataArraysB1(i).write(mem_idx1, tl_out.d.bits.data)
+        }
+      } else {
+        // write a refill beat across both banks.
+        mem_idx0 =
+          Mux(refill_one_beat, (refill_idx << log2Ceil(refillCycles)) | refill_cnt,
+          b0Row(s0_vaddr))
+        mem_idx1 =
+          Mux(refill_one_beat, (refill_idx << log2Ceil(refillCycles)) | refill_cnt,
+          b1Row(s0_vaddr))
+
+        when (wen) {
+          val data = tl_out.d.bits.data
+          dataArraysB0(i).write(mem_idx0, data(wordBits/2-1, 0))
+          dataArraysB1(i).write(mem_idx1, data(wordBits-1, wordBits/2))
+        }
+      }
+      if (enableICacheDelay) {
+        s2_dout(i) := Cat(dataArraysB1(i).read(RegNext(mem_idx1), RegNext(!wen && s0_ren)),
+                          dataArraysB0(i).read(RegNext(mem_idx0), RegNext(!wen && s0_ren)))
+      } else {
+        s2_dout(i) := RegNext(Cat(dataArraysB1(i).read(mem_idx1, !wen && s0_ren),
+                                  dataArraysB0(i).read(mem_idx0, !wen && s0_ren)))
+      }
+    }
+  }
+  val s2_tag_hit = RegNext(s1_tag_hit)
+  val s2_hit_way = OHToUInt(s2_tag_hit)
+  val s2_bankid = RegNext(s1_bankid)
+  val s2_way_mux = Mux1H(s2_tag_hit, s2_dout)
+
+  val s2_unbanked_data = s2_way_mux
+  val sz = s2_way_mux.getWidth
+  val s2_bank0_data = s2_way_mux(sz/2-1,0)
+  val s2_bank1_data = s2_way_mux(sz-1,sz/2)
+
+  val s2_data =
+    if (nBanks == 2) {
+      Mux(s2_bankid,
+        Cat(s2_bank0_data, s2_bank1_data),
+        Cat(s2_bank1_data, s2_bank0_data))
+    } else {
+      s2_unbanked_data
+    }
+
+  io.resp.bits.data := s2_data
+  io.resp.valid := s2_valid && s2_hit
+
+  tl_out.a.valid := s2_miss && !refill_valid && !io.s2_kill
+  tl_out.a.bits := edge_out.Get(
+    fromSource = 0.U,
+    toAddress = (refill_paddr >> blockOffBits) << blockOffBits,
+    lgSize = lgCacheBlockBytes.U)._2
+  tl_out.b.ready := true.B
+  tl_out.c.valid := false.B
+  tl_out.e.valid := false.B
+
+  io.perf.acquire := tl_out.a.fire()
+
+  when (!refill_valid) { invalidated := false.B }
+  when (refill_fire) { refill_valid := true.B }
+  when (refill_done) { refill_valid := false.B }
+
+  override def toString: String = BoomCoreStringPrefix(
+    "==L1-ICache==",
+    "Fetch bytes   : " + cacheParams.fetchBytes,
+    "Block bytes   : " + (1 << blockOffBits),
+    "Row bytes     : " + rowBytes,
+    "Word bits     : " + wordBits,
+    "Sets          : " + nSets,
+    "Ways          : " + nWays,
+    "Refill cycles : " + refillCycles,
+    "RAMs          : (" +  wordBits/nBanks + " x " + nSets*refillCycles + ") using " + nBanks + " banks",
+    "" + (if (nBanks == 2) "Dual-banked" else "Single-banked"),
+    "I-TLB ways    : " + cacheParams.nTLBWays + "\n",
+    "pipt: " + is_pipt, 
+    "untagBits: " + untagBits, 
+    "idxBits: " + idxBits,
+    "tagBits: " + tagBits, 
+    "pgUntagBits: " + pgUntagBits + "\n")
+}
+
+ //pgIdxBits = 12
+  //def untagBits = blockOffBits + idxBits
+  //def idxBits = log2Up(cacheParams.nSets)
+  //def tagBits = tlBundleParams.addressBits - pgUntagBits
+  //def pgUntagBits = if (usingVM) untagBits min pgIdxBits else untagBits
+
+
+
+/**
+ * Main ICache module
+ *
+ * @param outer top level ICache class
+ */
+@chiselName
+class ICacheModule_old(outer: ICache) extends LazyModuleImp(outer)
   with HasBoomFrontendParameters
 {
   val enableICacheDelay = tileParams.core.asInstanceOf[BoomCoreParams].enableICacheDelay
@@ -376,5 +689,3 @@ class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
     "" + (if (nBanks == 2) "Dual-banked" else "Single-banked"),
     "I-TLB ways    : " + cacheParams.nTLBWays + "\n")
 }
-
-

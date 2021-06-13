@@ -160,7 +160,7 @@ class WithNMediumBooms(n: Int = 1, overrideIdOffset: Option[Int] = None) extends
               DCacheParams(rowBits = site(SystemBusKey).beatBits, nSets=64, nWays=4, nMSHRs=2, nTLBWays=8)
             ),
             icache = Some(
-              ICacheParams(rowBits = site(SystemBusKey).beatBits, nSets=64, nWays=4, fetchBytes=2*4)
+              ICacheParams(rowBits = site(SystemBusKey).beatBits, nSets=256, nWays=4, fetchBytes=2*4)
             ),
             hartId = i + idOffset
           ),

@@ -346,6 +346,9 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   //      Send request to ICache
   // --------------------------------------------------------
 
+  //debug
+  val debug_cycles = freechips.rocketchip.util.WideCounter(32)
+
   val s0_vpc       = WireInit(0.U(vaddrBitsExtended.W))
   val s0_ghist     = WireInit((0.U).asTypeOf(new GlobalHistory))
   val s0_tsrc      = WireInit(0.U(BSRC_SZ.W))
@@ -357,6 +360,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val s0_replay_ppc  = Wire(UInt())
   val s0_s1_use_f3_bpd_resp = WireInit(false.B)
 
+  val s0_pred_bits = WireInit(0.U(2.W))
+  val last_pred_bits = RegNext(s0_pred_bits)
 
 
 
@@ -365,10 +370,20 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_vpc     := io_reset_vector
     s0_ghist   := (0.U).asTypeOf(new GlobalHistory)
     s0_tsrc    := BSRC_C
+
+    s0_pred_bits := 0.U
+    // when(s0_vpc(31, 20) =/= 0.U){
+    when(true.B){
+      printf("cycle: %d, set pred bits place1: %d\n", debug_cycles.value, s0_pred_bits)
+    }
   }
 
   icache.io.req.valid     := s0_valid
-  icache.io.req.bits.addr := s0_vpc
+  icache.io.req.bits.addr := Cat(Cat((s0_vpc >> 14), s0_pred_bits), s0_vpc(11,0))
+
+  when(s0_vpc(31, 20) =/= 0.U){
+    printf("frontend cycle: %d, addr: 0x%x, vpc: 0x%x, pred_bits: %d\n", debug_cycles.value, icache.io.req.bits.addr, s0_vpc, s0_pred_bits)
+  }
 
   bpd.io.f0_req.valid      := s0_valid
   bpd.io.f0_req.bits.pc    := s0_vpc
@@ -431,6 +446,12 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_vpc       := f1_predicted_target
     s0_ghist     := f1_predicted_ghist
     s0_is_replay := false.B
+
+    s0_pred_bits := s1_ppc(13, 12)
+    //when(s0_vpc(31, 20) =/= 0.U){
+    when(true.B){
+      printf("cycle: %d, set pred bits place2: %d\n", debug_cycles.value, s0_pred_bits)
+    }
   }
 
   // --------------------------------------------------------
@@ -488,7 +509,14 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_ghist := s2_ghist
     s0_tsrc  := s2_tsrc
     f1_clear := true.B
-  } .elsewhen (s2_valid && f3_ready) {
+
+    s0_pred_bits := s2_ppc(13, 12)
+    // when(s0_vpc(31, 20) =/= 0.U){
+    when(true.B){
+      printf("cycle: %d, set pred bits place3: %d\n", debug_cycles.value, s0_pred_bits)
+    }
+  } 
+  .elsewhen (s2_valid && f3_ready) {
     when (s1_valid && s1_vpc === f2_predicted_target && !f2_correct_f1_ghist) {
       // We trust our prediction of what the global history for the next branch should be
       s2_ghist := f2_predicted_ghist
@@ -502,6 +530,12 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       s0_ghist     := f2_predicted_ghist
       s2_fsrc      := BSRC_2
       s0_tsrc      := BSRC_2
+
+      s0_pred_bits := s2_ppc(13, 12)
+      // when(s0_vpc(31, 20) =/= 0.U){
+      when(true.B){
+        printf("cycle: %d, set pred bits place4: %d\n", debug_cycles.value, s0_pred_bits)
+      }
     }
   }
   s0_replay_bpd_resp := f2_bpd_resp
@@ -834,6 +868,9 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       s0_ghist     := f3_predicted_ghist
       s0_tsrc      := BSRC_3
 
+      s0_pred_bits := last_pred_bits
+      printf("frontend cycles: %d, set pred bits place 5: %d\n", debug_cycles.value, s0_pred_bits)
+
       f3_fetch_bundle.fsrc := BSRC_3
     }
   }
@@ -962,6 +999,9 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_is_replay := false.B
     s0_is_sfence := true.B
 
+    s0_pred_bits := last_pred_bits
+    printf("frontend cycles: %d, set pred bits place 6: %d\n", debug_cycles.value, s0_pred_bits)
+
   }.elsewhen (io.cpu.redirect_flush) {
     fb.io.clear := true.B
     f4_clear    := true.B
@@ -979,6 +1019,9 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
 
     ftq.io.redirect.valid := io.cpu.redirect_val
     ftq.io.redirect.bits  := io.cpu.redirect_ftq_idx
+
+    s0_pred_bits := last_pred_bits
+    printf("frontend cycles: %d, set pred bits place 7: %d\n", debug_cycles.value, s0_pred_bits)
   }
 
   ftq.io.debug_ftq_idx := io.cpu.debug_ftq_idx
