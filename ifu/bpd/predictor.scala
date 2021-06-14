@@ -25,8 +25,6 @@ class BranchPrediction(implicit p: Parameters) extends BoomBundle()(p)
   val is_jal          = Bool()
   // What is the target of his branch/jump? Do we know the target?
   val predicted_pc    = Valid(UInt(vaddrBitsExtended.W))
-
-
 }
 
 // A branch prediction for a entire fetch-width worth of instructions
@@ -121,12 +119,24 @@ class BranchPredictionRequest(implicit p: Parameters) extends BoomBundle()(p)
 }
 
 
+class UpdateBtbPredBitsInfo(implicit p: Parameters) extends BoomBundle()(p)
+{
+  val pc = UInt(48.W)
+  val cfi_idx = UInt(2.W)
+  val pbits = UInt(2.W)
+}
+
+
 class BranchPredictionBankResponse(implicit p: Parameters) extends BoomBundle()(p)
   with HasBoomFrontendParameters
 {
   val f1 = Vec(bankWidth, new BranchPrediction)
   val f2 = Vec(bankWidth, new BranchPrediction)
   val f3 = Vec(bankWidth, new BranchPrediction)
+
+  val f1_pbits = Vec(bankWidth, Valid(UInt(2.W)))
+  val f2_pbits = Vec(bankWidth, Valid(UInt(2.W)))
+  val f3_pbits = Vec(bankWidth, Valid(UInt(2.W)))
 }
 
 abstract class BranchPredictorBank(implicit p: Parameters) extends BoomModule()(p)
@@ -154,11 +164,15 @@ abstract class BranchPredictorBank(implicit p: Parameters) extends BoomModule()(
     val f3_fire = Input(Bool())
 
     val update = Input(Valid(new BranchPredictionBankUpdate))
+
+    //chw
+    val pbits_update = Input(Valid(new UpdateBtbPredBitsInfo()))
   })
   io.resp := io.resp_in(0)
 
   io.f3_meta := 0.U
 
+  //def fetchIdx(addr: UInt) = addr >> log2Ceil(fetchBytes)
   val s0_idx       = fetchIdx(io.f0_pc)
   val s1_idx       = RegNext(s0_idx)
   val s2_idx       = RegNext(s1_idx)
@@ -185,8 +199,6 @@ abstract class BranchPredictorBank(implicit p: Parameters) extends BoomModule()(
   val s1_update_idx = RegNext(s0_update_idx)
   val s1_update_valid = RegNext(s0_update_valid)
 
-
-
 }
 
 
@@ -209,6 +221,9 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
 
     // Update
     val update = Input(Valid(new BranchPredictionUpdate))
+
+    //chw
+    val pbits_update = Input(Valid(new UpdateBtbPredBitsInfo()))
   })
 
   var total_memsize = 0
@@ -240,8 +255,15 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
     banked_predictors(0).io.f1_lhist := banked_lhist_providers(0).io.f1_lhist
 
     banked_predictors(0).io.resp_in(0)           := (0.U).asTypeOf(new BranchPredictionBankResponse)
+
+    //chw
+    banked_predictors(0).io.pbits_update := io.pbits_update
   } else {
     require(nBanks == 2)
+
+    //chw
+    banked_predictors(0).io.pbits_update := io.pbits_update
+    banked_predictors(1).io.pbits_update := io.pbits_update
 
     banked_predictors(0).io.resp_in(0)           := (0.U).asTypeOf(new BranchPredictionBankResponse)
     banked_predictors(1).io.resp_in(0)           := (0.U).asTypeOf(new BranchPredictionBankResponse)

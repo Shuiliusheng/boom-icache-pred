@@ -360,10 +360,20 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val s0_replay_ppc  = Wire(UInt())
   val s0_s1_use_f3_bpd_resp = WireInit(false.B)
 
+  //chw
   val s0_pred_bits = WireInit(0.U(2.W))
   val last_pred_bits = RegNext(s0_pred_bits)
 
+  class LastBrInfo extends Bundle {
+    val valid = Bool()
+    val br_pc = UInt(vaddrBitsExtended.W)
+    val br_cfi_idx = UInt(2.W)
+    val br_target = UInt(vaddrBitsExtended.W)
+  }
 
+  val f1_lastbr = RegInit((0.U).asTypeOf(new LastBrInfo))
+  val f2_lastbr = RegInit((0.U).asTypeOf(new LastBrInfo))
+  val f3_lastbr = RegInit((0.U).asTypeOf(new LastBrInfo))
 
   when (RegNext(reset.asBool) && !reset.asBool) {
     s0_valid   := true.B
@@ -387,6 +397,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   bpd.io.f0_req.valid      := s0_valid
   bpd.io.f0_req.bits.pc    := s0_vpc
   bpd.io.f0_req.bits.ghist := s0_ghist
+
 
   // --------------------------------------------------------
   // **** ICache Access (F1) ****
@@ -414,6 +425,37 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
 
   icache.io.s1_paddr := s1_ppc
   icache.io.s1_kill  := tlb.io.resp.miss || f1_clear
+
+  //chw: 如果地址翻译完成，并且上一条指令是一条br，则更新btb
+  bpd.io.pbits_update.bits.pc := 0.U
+  bpd.io.pbits_update.bits.cfi_idx := 0.U
+  bpd.io.pbits_update.bits.pbits := 0.U
+  when(!s1_tlb_miss){
+    when(f3_lastbr.valid && (f3_lastbr.br_target === s1_vpc)){
+      bpd.io.pbits_update.valid := true.B
+      bpd.io.pbits_update.bits.pc := f3_lastbr.br_pc
+      bpd.io.pbits_update.bits.cfi_idx := f3_lastbr.br_cfi_idx
+      bpd.io.pbits_update.bits.pbits := s1_ppc(13,12)
+    }
+    .elsewhen(f2_lastbr.valid && (f2_lastbr.br_target === s1_vpc)){
+      bpd.io.pbits_update.valid := true.B
+      bpd.io.pbits_update.bits.pc := f2_lastbr.br_pc
+      bpd.io.pbits_update.bits.cfi_idx := f2_lastbr.br_cfi_idx
+      bpd.io.pbits_update.bits.pbits := s1_ppc(13,12)
+    }
+    .elsewhen(f1_lastbr.valid && (f1_lastbr.br_target === s1_vpc)){
+      bpd.io.pbits_update.valid := true.B
+      bpd.io.pbits_update.bits.pc := f1_lastbr.br_pc
+      bpd.io.pbits_update.bits.cfi_idx := f1_lastbr.br_cfi_idx
+      bpd.io.pbits_update.bits.pbits := s1_ppc(13,12)
+    }
+    .otherwise{
+      bpd.io.pbits_update.valid := false.B
+    }
+  }
+  .otherwise{
+    bpd.io.pbits_update.valid := false.B
+  }
 
   val f1_mask = fetchMask(s1_vpc)
   val f1_redirects = (0 until fetchWidth) map { i =>
@@ -447,9 +489,17 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_is_replay := false.B
 
     s0_pred_bits := s1_ppc(13, 12)
-    //when(s0_vpc(31, 20) =/= 0.U){
-    //   printf("cycle: %d, set pred bits place2: %d\n", debug_cycles.value, s0_pred_bits)
-    // }
+
+    //chw: btb给出了预测的结果，而不是采用了npc
+    when(f1_do_redirect){
+      f1_lastbr.valid := true.B
+      f1_lastbr.br_pc := s1_vpc
+      f1_lastbr.br_cfi_idx := f1_redirect_idx
+      f1_lastbr.br_target := f1_predicted_target
+    }
+    .otherwise{
+      f1_lastbr.valid := false.B
+    }
   }
 
   // --------------------------------------------------------
@@ -509,9 +559,6 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     f1_clear := true.B
 
     s0_pred_bits := s2_ppc(13, 12)
-    // when(s0_vpc(31, 20) =/= 0.U){
-    //   printf("cycle: %d, set pred bits place3: %d\n", debug_cycles.value, s0_pred_bits)
-    // }
   } 
   .elsewhen (s2_valid && f3_ready) {
     when (s1_valid && s1_vpc === f2_predicted_target && !f2_correct_f1_ghist) {
@@ -529,9 +576,17 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       s0_tsrc      := BSRC_2
 
       s0_pred_bits := s2_ppc(13, 12)
-      // when(s0_vpc(31, 20) =/= 0.U){
-      //   printf("cycle: %d, set pred bits place4: %d\n", debug_cycles.value, s0_pred_bits)
-      // }
+      
+      //chw: btb给出了预测的结果，而不是采用了npc
+      when(f2_do_redirect){
+        f2_lastbr.br_pc := s2_vpc
+        f2_lastbr.valid := true.B
+        f2_lastbr.br_cfi_idx := f2_redirect_idx
+        f2_lastbr.br_target := f2_predicted_target
+      }
+      .otherwise{
+        f2_lastbr.valid := false.B
+      }
     }
   }
   s0_replay_bpd_resp := f2_bpd_resp
@@ -865,9 +920,18 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       s0_tsrc      := BSRC_3
 
       s0_pred_bits := last_pred_bits
-      // printf("frontend cycles: %d, set pred bits place 5: %d\n", debug_cycles.value, s0_pred_bits)
-
       f3_fetch_bundle.fsrc := BSRC_3
+
+      //chw: btb给出了预测的结果，而不是采用了npc
+      when(f3_redirects.reduce(_||_)){
+        f3_lastbr.br_pc := RegNext(s2_vpc)
+        f3_lastbr.valid := true.B
+        f3_lastbr.br_cfi_idx := PriorityEncoder(f3_redirects)
+        f3_lastbr.br_target := f3_predicted_target
+      }
+      .otherwise{
+        f3_lastbr.valid := false.B
+      }
     }
   }
 

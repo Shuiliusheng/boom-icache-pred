@@ -17,7 +17,7 @@ case class BoomFAMicroBTBParams(
   offsetSz: Int = 13
 )
 
-
+//全相联BTB
 class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBTBParams())(implicit p: Parameters) extends BranchPredictorBank()(p)
 {
   override val nWays         = params.nWays
@@ -50,17 +50,30 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
     val write_way = UInt(log2Ceil(nWays).W)
   }
 
+  class IndexInfo extends Bundle {
+    val pc = UInt(48.W)
+    val way = UInt(log2Ceil(nWays).W)
+    val valid = Bool()
+  }
+
   val s1_meta = Wire(new MicroBTBPredictMeta)
   override val metaSz = s1_meta.asUInt.getWidth
 
 
   val meta     = RegInit((0.U).asTypeOf(Vec(nWays, Vec(bankWidth, new MicroBTBMeta))))
   val btb      = Reg(Vec(nWays, Vec(bankWidth, new MicroBTBEntry)))
+  
+  //chw
+  val pbits        = Reg(Vec(nWays, Vec(bankWidth, UInt(2.W))))
+  val pbits_valid  = RegInit((0.U).asTypeOf(Vec(nWays, Vec(bankWidth, UInt(1.W)))))
+
+  val hitinfo1 = Reg(new IndexInfo())
+  val hitinfo2 = RegNext(hitinfo1)
+  val hitinfo3 = RegNext(hitinfo2)
+
 
   val mems = Nil
-
   val s1_req_tag   = s1_idx
-
 
   val s1_resp   = Wire(Vec(bankWidth, Valid(UInt(vaddrBitsExtended.W))))
   val s1_taken  = Wire(Vec(bankWidth, Bool()))
@@ -98,6 +111,7 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
     PriorityEncoder(s1_hit_ohs.map(_.asUInt).reduce(_|_)),
     alloc_way)
 
+
   for (w <- 0 until bankWidth) {
     io.resp.f1(w).predicted_pc := s1_resp(w)
     io.resp.f1(w).is_br        := s1_is_br(w)
@@ -129,6 +143,9 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
   // Write the BTB with the target
   when (s1_update.valid && s1_update.bits.cfi_taken && s1_update.bits.cfi_idx.valid && s1_update.bits.is_commit_update) {
     btb(s1_update_write_way)(s1_update_cfi_idx).offset := new_offset_value
+    
+    //chw: 对于刚更新的btb表项，首先将其标记为not valid,即没有正确的pbits预测值
+    pbits_valid(s1_update_write_way)(s1_update_cfi_idx) := 0.U
   }
 
   // Write the meta
@@ -146,6 +163,41 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
         bimWrite(meta(s1_update_write_way)(w).ctr, was_taken)
       )
     }
+  }
+
+  //////////////////////////////////////////////////////////////////////////
+  when(s1_hits.reduce(_||_)){
+    hitinfo1.way := s1_meta.write_way
+    hitinfo1.valid := true.B
+    hitinfo1.pc := s1_idx
+  }
+
+  //chw: update pred_bits info
+  for (w <- 0 until bankWidth) {
+    io.resp.f1_pbits(w).valid := Mux(pbits_valid(s1_hit_ways(w))(w) === 1.U, true.B, false.B)
+    io.resp.f1_pbits(w).bits := pbits(s1_hit_ways(w))(w)
+  }
+
+  //chw: update fx_hit_info
+  io.resp.f2_pbits := RegNext(io.resp.f1_pbits)
+  io.resp.f3_pbits := RegNext(io.resp.f2_pbits)
+
+
+  //chw: 在地址转换完成之后，更新对应btb表项中的pred位
+  val update_pc = fetchIdx(io.pbits_update.bits.pc)
+  when(io.pbits_update.valid && (update_pc === hitinfo1.pc) && hitinfo1.valid){//有效，并且需要更新faubtb
+    pbits_valid(hitinfo1.way)(io.pbits_update.bits.cfi_idx) := 1.U
+    pbits(hitinfo1.way)(io.pbits_update.bits.cfi_idx) := io.pbits_update.bits.pbits
+  }
+
+  when(io.pbits_update.valid && (update_pc === hitinfo2.pc) && hitinfo2.valid){//有效，并且需要更新faubtb
+    pbits_valid(hitinfo2.way)(io.pbits_update.bits.cfi_idx) := 1.U
+    pbits(hitinfo2.way)(io.pbits_update.bits.cfi_idx) := io.pbits_update.bits.pbits
+  }
+
+  when(io.pbits_update.valid && (update_pc === hitinfo3.pc) && hitinfo3.valid){//有效，并且需要更新faubtb
+    pbits_valid(hitinfo3.way)(io.pbits_update.bits.cfi_idx) := 1.U
+    pbits(hitinfo3.way)(io.pbits_update.bits.cfi_idx) := io.pbits_update.bits.pbits
   }
 
 }

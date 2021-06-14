@@ -49,10 +49,14 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
     val write_way = UInt(log2Ceil(nWays).W)
   }
 
+  class IndexInfo extends Bundle {
+    val pc = UInt(48.W)
+    val way = UInt(log2Ceil(nWays).W)
+    val valid = Bool()
+  }
+
   val s1_meta = Wire(new BTBPredictMeta)
   val f3_meta = RegNext(RegNext(s1_meta))
-
-
   io.f3_meta := f3_meta.asUInt
 
   override val metaSz = s1_meta.asUInt.getWidth
@@ -65,6 +69,15 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
   val meta     = Seq.fill(nWays) { SyncReadMem(nSets, Vec(bankWidth, UInt(btbMetaSz.W))) }
   val btb      = Seq.fill(nWays) { SyncReadMem(nSets, Vec(bankWidth, UInt(btbEntrySz.W))) }
   val ebtb     = SyncReadMem(extendedNSets, UInt(vaddrBitsExtended.W))
+
+  //chw: new mem for pbits
+  val pbits       = Seq.fill(nWays) { SyncReadMem(nSets, Vec(bankWidth, UInt(2.W))) }
+  val pbits_valid = Seq.fill(nWays) { SyncReadMem(nSets, Vec(bankWidth, UInt(1.W))) }
+
+  val hitinfo1 = Reg(new IndexInfo())
+  val hitinfo2 = RegNext(hitinfo1)
+  val hitinfo3 = RegNext(hitinfo2)
+
 
   val mems = (((0 until nWays) map ({w:Int => Seq(
     (f"btb_meta_way$w", nSets, bankWidth * btbMetaSz),
@@ -109,6 +122,7 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
         io.resp.f2(w).taken      := true.B
       }
     }
+
     when (RegNext(RegNext(s1_hits(w)))) {
       io.resp.f3(w).predicted_pc := RegNext(io.resp.f2(w).predicted_pc)
       io.resp.f3(w).is_br        := RegNext(io.resp.f2(w).is_br)
@@ -188,11 +202,94 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
           s1_update_wmeta_mask).asBools
       )
 
-
+      //chw: update pbits_valid
+      pbits_valid(w).write(
+        Mux(doing_reset, reset_idx, s1_update_idx),
+        VecInit(Seq.fill(bankWidth) { 0.U(1.W) }),
+        Mux(doing_reset, (~(0.U(bankWidth.W))), s1_update_wbtb_mask).asBools
+      )
     }
   }
   when (s1_update_wbtb_mask =/= 0.U && offset_is_extended) {
     ebtb.write(s1_update_idx, s1_update.bits.target)
+  }
+
+
+  /////////////////////////////////////////////////////////////////////
+  when(s1_hits.reduce(_||_)){
+    hitinfo1.way := s1_meta.write_way
+    hitinfo1.valid := true.B
+    hitinfo1.pc := s1_idx
+  }
+
+    //chw
+  val s1_req_pbits = VecInit(pbits.map(_.read(s0_idx , s0_valid)))
+  val s1_req_pbits_valid = VecInit(pbits_valid.map(_.read(s0_idx , s0_valid)))
+
+  for (w <- 0 until bankWidth) {
+    val entry_pbits = s1_req_pbits(s1_hit_ways(w))(w)
+    val entry_pbits_valid = Mux(s1_req_pbits_valid(s1_hit_ways(w))(w) === 1.U, true.B, false.B)
+    //chw
+    when(RegNext(s1_resp(w).valid)){
+      io.resp.f2_pbits(w).valid := RegNext(entry_pbits_valid)
+      io.resp.f2_pbits(w).bits := RegNext(entry_pbits)
+    }
+    //chw
+    when(RegNext(RegNext(s1_resp(w).valid))){
+      io.resp.f3_pbits(w).valid := RegNext(io.resp.f2_pbits(w).valid)
+      io.resp.f3_pbits(w).bits := RegNext(io.resp.f2_pbits(w).bits)
+    }
+  }
+
+  val s1_update_wpbits_data = io.pbits_update.bits.pbits
+  val s1_update_wpbits_mask = UIntToOH(io.pbits_update.bits.cfi_idx)
+  val update_pc = fetchIdx(io.pbits_update.bits.pc)
+
+  for (w <- 0 until nWays) {
+    when((hitinfo1.way === w.U || (w == 0 && nWays == 1).B) && 
+          io.pbits_update.valid && hitinfo1.valid && (update_pc === hitinfo1.pc)) {
+      pbits(w).write(
+        hitinfo1.pc, 
+        VecInit(Seq.fill(bankWidth) { s1_update_wpbits_data.asUInt}),
+        s1_update_wpbits_mask.asBools
+      )
+
+      pbits_valid(w).write(
+        hitinfo1.pc, 
+        VecInit(Seq.fill(bankWidth) { 1.U(1.W)}),
+        s1_update_wpbits_mask.asBools
+      )
+    }
+
+    when((hitinfo2.way === w.U || (w == 0 && nWays == 1).B) && 
+          io.pbits_update.valid && hitinfo2.valid && (update_pc === hitinfo2.pc)) {
+      pbits(w).write(
+        hitinfo2.pc, 
+        VecInit(Seq.fill(bankWidth) { s1_update_wpbits_data.asUInt}),
+        s1_update_wpbits_mask.asBools
+      )
+
+      pbits_valid(w).write(
+        hitinfo2.pc, 
+        VecInit(Seq.fill(bankWidth) { 1.U(1.W)}),
+        s1_update_wpbits_mask.asBools
+      )
+    }
+
+    when((hitinfo3.way === w.U || (w == 0 && nWays == 1).B) && 
+          io.pbits_update.valid && hitinfo3.valid && (update_pc === hitinfo3.pc)) {
+      pbits(w).write(
+        hitinfo3.pc, 
+        VecInit(Seq.fill(bankWidth) { s1_update_wpbits_data.asUInt}),
+        s1_update_wpbits_mask.asBools
+      )
+
+      pbits_valid(w).write(
+        hitinfo3.pc, 
+        VecInit(Seq.fill(bankWidth) { 1.U(1.W)}),
+        s1_update_wpbits_mask.asBools
+      )
+    }
   }
 
 }
