@@ -37,6 +37,9 @@ class BranchPredictionBundle(implicit p: Parameters) extends BoomBundle()(p)
   val preds = Vec(fetchWidth, new BranchPrediction)
   val meta = Output(Vec(nBanks, UInt(bpdMaxMetaLength.W)))
   val lhist = Output(Vec(nBanks, UInt(localHistoryLength.W)))
+
+  //chw: 在bpd的输出中，增加对pbits的预测结果，也是分为f1,f2,f3
+  val pbits = Output(Vec(fetchWidth, Valid(UInt(2.W))))
 }
 
 
@@ -316,10 +319,20 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
     ).reduce(_||_)
   }
 
+  val debug_cycles = freechips.rocketchip.util.WideCounter(32)
   if (nBanks == 1) {
     io.resp.f1.preds    := banked_predictors(0).io.resp.f1
     io.resp.f2.preds    := banked_predictors(0).io.resp.f2
     io.resp.f3.preds    := banked_predictors(0).io.resp.f3
+
+    // for(w <- 0 until fetchWidth){
+    //   printf("predictor set f3, cycle: %d, w: %d, valid: %d, pred_pc: 0x%x, src_pc: 0x%x\n", debug_cycles.value, w.U, banked_predictors(0).io.resp.f3(w).predicted_pc.valid, banked_predictors(0).io.resp.f3(w).predicted_pc.bits, io.resp.f3.pc)
+    // }
+    
+    io.resp.f1.pbits    := banked_predictors(0).io.resp.f1_pbits
+    io.resp.f2.pbits    := banked_predictors(0).io.resp.f2_pbits
+    io.resp.f3.pbits    := banked_predictors(0).io.resp.f3_pbits
+    
     io.resp.f3.meta(0)  := banked_predictors(0).io.f3_meta
     io.resp.f3.lhist(0) := banked_lhist_providers(0).io.f3_lhist
 
@@ -348,11 +361,17 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
       for (i <- 0 until bankWidth) {
         io.resp.f1.preds(i)           := banked_predictors(0).io.resp.f1(i)
         io.resp.f1.preds(i+bankWidth) := banked_predictors(1).io.resp.f1(i)
+        
+        io.resp.f1.pbits(i)           := banked_predictors(0).io.resp.f1_pbits(i)
+        io.resp.f1.pbits(i+bankWidth) := banked_predictors(1).io.resp.f1_pbits(i)
       }
     } .otherwise {
       for (i <- 0 until bankWidth) {
         io.resp.f1.preds(i)           := banked_predictors(1).io.resp.f1(i)
         io.resp.f1.preds(i+bankWidth) := banked_predictors(0).io.resp.f1(i)
+
+        io.resp.f1.pbits(i)           := banked_predictors(1).io.resp.f1_pbits(i)
+        io.resp.f1.pbits(i+bankWidth) := banked_predictors(0).io.resp.f1_pbits(i)
       }
     }
 
@@ -360,11 +379,17 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
       for (i <- 0 until bankWidth) {
         io.resp.f2.preds(i)           := banked_predictors(0).io.resp.f2(i)
         io.resp.f2.preds(i+bankWidth) := banked_predictors(1).io.resp.f2(i)
+
+        io.resp.f2.pbits(i)           := banked_predictors(0).io.resp.f2_pbits(i)
+        io.resp.f2.pbits(i+bankWidth) := banked_predictors(1).io.resp.f2_pbits(i)
       }
     } .otherwise {
       for (i <- 0 until bankWidth) {
         io.resp.f2.preds(i)           := banked_predictors(1).io.resp.f2(i)
         io.resp.f2.preds(i+bankWidth) := banked_predictors(0).io.resp.f2(i)
+
+        io.resp.f2.pbits(i)           := banked_predictors(1).io.resp.f2_pbits(i)
+        io.resp.f2.pbits(i+bankWidth) := banked_predictors(0).io.resp.f2_pbits(i)
       }
     }
 
@@ -372,11 +397,17 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
       for (i <- 0 until bankWidth) {
         io.resp.f3.preds(i)           := banked_predictors(0).io.resp.f3(i)
         io.resp.f3.preds(i+bankWidth) := banked_predictors(1).io.resp.f3(i)
+
+        io.resp.f3.pbits(i)           := banked_predictors(0).io.resp.f3_pbits(i)
+        io.resp.f3.pbits(i+bankWidth) := banked_predictors(1).io.resp.f3_pbits(i)
       }
     } .otherwise {
       for (i <- 0 until bankWidth) {
         io.resp.f3.preds(i)           := banked_predictors(1).io.resp.f3(i)
         io.resp.f3.preds(i+bankWidth) := banked_predictors(0).io.resp.f3(i)
+
+        io.resp.f3.pbits(i)           := banked_predictors(1).io.resp.f3_pbits(i)
+        io.resp.f3.pbits(i+bankWidth) := banked_predictors(0).io.resp.f3_pbits(i)
       }
     }
   }
