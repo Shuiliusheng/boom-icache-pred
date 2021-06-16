@@ -100,6 +100,10 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
   val s1_hits     = s1_hit_ohs.map { oh => oh.reduce(_||_) }
   val s1_hit_ways = s1_hit_ohs.map { oh => PriorityEncoder(oh) }
 
+  //chw: for pred bits in BTB
+  val s1_req_pbits = VecInit(pbits.map(_.read(s0_idx , s0_valid)))
+  val s1_req_pbits_valid = VecInit(pbits_valid.map(_.read(s0_idx , s0_valid)))
+  
   val debug_cycles = freechips.rocketchip.util.WideCounter(32)
 
   for (w <- 0 until bankWidth) {
@@ -113,9 +117,9 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
     s1_is_br(w)  := !doing_reset && s1_resp(w).valid &&  entry_meta.is_br
     s1_is_jal(w) := !doing_reset && s1_resp(w).valid && !entry_meta.is_br
 
-    //when(s1_hits(w)){
-      // printf("BTB s1_resp, cycle: %d, w: %d, valid: %d, hit: %d, pc: 0x%x, target pc: 0x%x\n", debug_cycles.value, w.U, s1_resp(w).valid, s1_hits(w), s1_idx << 3.U, s1_resp(w).bits)
-    //}
+    //chw: for pred bits in BTB
+    val entry_pbits = s1_req_pbits(s1_hit_ways(w))(w)
+    val entry_pbits_valid = Mux(s1_req_pbits_valid(s1_hit_ways(w))(w) === 1.U, true.B, false.B)
 
     io.resp.f2(w) := io.resp_in(0).f2(w)
     io.resp.f3(w) := io.resp_in(0).f3(w)
@@ -126,7 +130,9 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
       when (RegNext(s1_is_jal(w))) {
         io.resp.f2(w).taken      := true.B
       }
-      // printf("BTB pred pc f2, cycle: %d, idx: 0x%x, valid: %d, target pc: 0x%x\n", debug_cycles.value, RegNext(s1_idx) << 3.U, io.resp.f2(w).predicted_pc.valid, io.resp.f2(w).predicted_pc.bits)
+      //chw: output pbits in BTB
+      io.resp.f2(w).pbits.valid := RegNext(entry_pbits_valid)
+      io.resp.f2(w).pbits.bits := RegNext(entry_pbits)
     }
 
     when (RegNext(RegNext(s1_hits(w)))) {
@@ -136,12 +142,10 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
       when (RegNext(RegNext(s1_is_jal(w)))) {
         io.resp.f3(w).taken      := true.B
       }
-      // printf("BTB update f3, cycle: %d, idx: 0x%x, valid: %d, target pc: 0x%x\n", debug_cycles.value, RegNext(RegNext(s1_idx)) << 3.U, io.resp.f3(w).predicted_pc.valid, io.resp.f3(w).predicted_pc.bits)
+      //chw: output pbits in BTB
+      io.resp.f3(w).pbits.valid := RegNext(io.resp.f2(w).pbits.valid)
+      io.resp.f3(w).pbits.bits := RegNext(io.resp.f2(w).pbits.bits)
     }
-
-    // printf("BTB f3, cycle: %d, valid: %d, target pc: 0x%x\n", debug_cycles.value, io.resp.f3(w).predicted_pc.valid, io.resp.f3(w).predicted_pc.bits)
-    // printf("BTB f2, cycle: %d, valid: %d, target pc: 0x%x\n", debug_cycles.value, io.resp.f2(w).predicted_pc.valid, io.resp.f2(w).predicted_pc.bits)
-    // printf("BTB f1, cycle: %d, valid: %d, target pc: 0x%x\n", debug_cycles.value, io.resp.f1(w).predicted_pc.valid, io.resp.f1(w).predicted_pc.bits)
   }
 
   val alloc_way = if (nWays > 1) {
@@ -233,46 +237,17 @@ class BTBBranchPredictorBank(params: BoomBTBParams = BoomBTBParams())(implicit p
     hitinfo1.valid := true.B
     hitinfo1.pc := s1_idx
 
-    printf("BTB s1 hit, cycle: %d, way: %d, pc: 0x%x\n", debug_cycles.value, s1_meta.write_way, s1_idx << 3.U)
-    //printf("BTB meta cycle: %d, tag: 0x%x, 0x%x\n", debug_cycles.value, s1_req_rmeta(s1_hit_ways(0))(0).tag, s1_req_rmeta(s1_hit_ways(1))(1).tag)
-  }
-
-    //chw
-  val s1_req_pbits = VecInit(pbits.map(_.read(s0_idx , s0_valid)))
-  val s1_req_pbits_valid = VecInit(pbits_valid.map(_.read(s0_idx , s0_valid)))
-
-  for (w <- 0 until bankWidth) {
-    val entry_pbits = s1_req_pbits(s1_hit_ways(w))(w)
-    val entry_pbits_valid = Mux(s1_req_pbits_valid(s1_hit_ways(w))(w) === 1.U, true.B, false.B)
-
-    //接收faubtb传递来的消息
-    io.resp.f2_pbits(w) := io.resp_in(0).f2_pbits(w)
-    io.resp.f3_pbits(w) := io.resp_in(0).f3_pbits(w)
-
-    //chw
-    when(RegNext(s1_hits(w))){
-      io.resp.f2_pbits(w).valid := RegNext(entry_pbits_valid)
-      io.resp.f2_pbits(w).bits := RegNext(entry_pbits)
-
-      // printf("BTB pbits2, cycle: %d, pc: 0x%x, w: %d, hit: %d, pbit_valid: %d, bits: %d\n", debug_cycles.value, RegNext(s1_idx) << 3.U, w.U, RegNext(s1_hits(w)), io.resp.f2_pbits(w).valid, io.resp.f2_pbits(w).bits)
-    }
-    //chw
-    when(RegNext(RegNext(s1_hits(w)))){
-      io.resp.f3_pbits(w).valid := RegNext(io.resp.f2_pbits(w).valid)
-      io.resp.f3_pbits(w).bits := RegNext(io.resp.f2_pbits(w).bits)
-
-      // printf("BTB pbits3, cycle: %d, pc: 0x%x, w: %d, hit: %d, pbit_valid: %d, bits: %d\n", debug_cycles.value, RegNext(RegNext(s1_idx)) << 3.U, w.U, RegNext(RegNext(s1_hits(w))), io.resp.f3_pbits(w).valid, io.resp.f3_pbits(w).bits)
-    }
+    // printf("BTB s1 hit, cycle: %d, way: %d, pc: 0x%x\n", debug_cycles.value, s1_meta.write_way, s1_idx << 3.U)
   }
 
   val s1_update_wpbits_data = io.pbits_update.bits.pbits
   val s1_update_wpbits_mask = UIntToOH(io.pbits_update.bits.cfi_idx)
   val update_pc = fetchIdx(io.pbits_update.bits.pc)
 
-  // when(io.pbits_update.valid){
-  //   printf("BTB update pbits, cycle: %d, upc: 0x%x, | h1 valid: %d, pc: 0x%x | h2 valid: %d, pc: 0x%x | h3 valid: %d, pc: 0x%x\n", debug_cycles.value,
-  //     update_pc << 3.U, hitinfo1.valid, hitinfo1.pc << 3.U, hitinfo2.valid, hitinfo2.pc << 3.U, hitinfo3.valid, hitinfo3.pc << 3.U)
-  // }
+  when(io.pbits_update.valid){
+    printf("BTB update pbits, cycle: %d, upc: 0x%x, | h1 valid: %d, pc: 0x%x | h2 valid: %d, pc: 0x%x | h3 valid: %d, pc: 0x%x\n", debug_cycles.value,
+      update_pc << 3.U, hitinfo1.valid, hitinfo1.pc << 3.U, hitinfo2.valid, hitinfo2.pc << 3.U, hitinfo3.valid, hitinfo3.pc << 3.U)
+  }
 
   for (w <- 0 until nWays) {
     when((hitinfo1.way === w.U || (w == 0 && nWays == 1).B) && 

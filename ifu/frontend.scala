@@ -426,19 +426,9 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   icache.io.s1_paddr := s1_ppc
   icache.io.s1_kill  := tlb.io.resp.miss || f1_clear
 
-  // when(s1_valid){
-  //   printf("frontend cycle: %d, s1_vpc: 0x%x, s1_paddr: 0x%x, tlb miss: %d\n", debug_cycles.value, s1_vpc, s1_ppc, s1_tlb_miss)
-  // }
-
-  // when(f1_lastbr.valid){
-  //   printf("f1_lastbr valid cycle: %d, pc: 0x%x, target: 0x%x, cfi_idx: %d\n", debug_cycles.value, f1_lastbr.br_pc, f1_lastbr.br_target, f1_lastbr.br_cfi_idx)
-  // }
-  // when(f2_lastbr.valid){
-  //   printf("f2_lastbr valid cycle: %d, pc: 0x%x, target: 0x%x, cfi_idx: %d\n", debug_cycles.value, f2_lastbr.br_pc, f2_lastbr.br_target, f2_lastbr.br_cfi_idx)
-  // }
-  // when(f3_lastbr.valid){
-  //   printf("f3_lastbr valid cycle: %d, pc: 0x%x, target: 0x%x, cfi_idx: %d\n", debug_cycles.value, f3_lastbr.br_pc, f3_lastbr.br_target, f3_lastbr.br_cfi_idx)
-  // }
+  when(s1_valid){
+    printf("frontend cycle: %d, s1_vpc: 0x%x, s1_paddr: 0x%x, tlb miss: %d\n", debug_cycles.value, s1_vpc, s1_ppc, s1_tlb_miss)
+  }
 
   //chw: 如果地址翻译完成，并且上一条指令是一条br，则更新btb
   when(!s1_tlb_miss){
@@ -447,18 +437,21 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       bpd.io.pbits_update.bits.pc := f3_lastbr.br_pc
       bpd.io.pbits_update.bits.cfi_idx := f3_lastbr.br_cfi_idx
       bpd.io.pbits_update.bits.pbits := s1_ppc(13,12)
+      printf("f1_lastbr used, cycle: %d, pc: 0x%x, target: 0x%x, cfi_idx: %d\n", debug_cycles.value, f1_lastbr.br_pc, f1_lastbr.br_target, f1_lastbr.br_cfi_idx)
     }
     .elsewhen(f2_lastbr.valid && (f2_lastbr.br_target === s1_vpc)){
       bpd.io.pbits_update.valid := true.B
       bpd.io.pbits_update.bits.pc := f2_lastbr.br_pc
       bpd.io.pbits_update.bits.cfi_idx := f2_lastbr.br_cfi_idx
       bpd.io.pbits_update.bits.pbits := s1_ppc(13,12)
+      printf("f2_lastbr used, cycle: %d, pc: 0x%x, target: 0x%x, cfi_idx: %d\n", debug_cycles.value, f2_lastbr.br_pc, f2_lastbr.br_target, f2_lastbr.br_cfi_idx)
     }
     .elsewhen(f1_lastbr.valid && (f1_lastbr.br_target === s1_vpc)){
       bpd.io.pbits_update.valid := true.B
       bpd.io.pbits_update.bits.pc := f1_lastbr.br_pc
       bpd.io.pbits_update.bits.cfi_idx := f1_lastbr.br_cfi_idx
       bpd.io.pbits_update.bits.pbits := s1_ppc(13,12)
+      printf("f3_lastbr used, cycle: %d, pc: 0x%x, target: 0x%x, cfi_idx: %d\n", debug_cycles.value, f3_lastbr.br_pc, f3_lastbr.br_target, f3_lastbr.br_cfi_idx)
     }
     .otherwise{
       bpd.io.pbits_update.valid := false.B
@@ -474,11 +467,6 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     bpd.io.pbits_update.bits.pbits := 0.U
   }
 
-  // when(bpd.io.pbits_update.valid){
-  //   printf("bpd pbits valid, cycle: %d, pc: 0x%x, cfi_idx: %d, pbits: %d\n", debug_cycles.value, 
-  //         bpd.io.pbits_update.bits.pc, bpd.io.pbits_update.bits.cfi_idx, bpd.io.pbits_update.bits.pbits)
-  // }
-
   val f1_mask = fetchMask(s1_vpc)
   val f1_redirects = (0 until fetchWidth) map { i =>
     s1_valid && f1_mask(i) && s1_bpd_resp.preds(i).predicted_pc.valid &&
@@ -492,8 +480,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
                                 f1_targs(f1_redirect_idx),
                                 nextFetch(s1_vpc))
   //chw: f1 pbits info
-  val f1_pbits_val = s1_bpd_resp.pbits(f1_redirect_idx).valid
-  val f1_pbits     = s1_bpd_resp.pbits(f1_redirect_idx).bits
+  val f1_pbits_val = s1_bpd_resp.preds(f1_redirect_idx).pbits.valid
+  val f1_pbits     = s1_bpd_resp.preds(f1_redirect_idx).pbits.bits
 
   val f1_predicted_ghist = s1_ghist.update(
     s1_bpd_resp.preds.map(p => p.is_br && p.predicted_pc.valid).asUInt & f1_mask,
@@ -517,7 +505,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
 
     //使用预测的值
     s0_pred_bits := Mux(f1_do_redirect && f1_pbits_val, f1_pbits, s1_ppc(13, 12))
-    // printf("s1 set pred bits, cycle: %d, redirect: %d, target: 0x%x, f1_pbits_val: %d, bits: %d, last_pc: 0x%x\n", debug_cycles.value, f1_do_redirect, f1_predicted_target, f1_pbits_val, f1_pbits, bpd.io.resp.f1.pc)
+    printf("s1 set pred bits, cycle: %d, redirect: %d, br_pc: 0x%x, target: 0x%x, pbits_val: %d, bits: %d\n", debug_cycles.value, f1_do_redirect, bpd.io.resp.f1.pc, f1_predicted_target, f1_pbits_val, f1_pbits)
 
     //chw: btb给出了预测的结果，而不是采用了npc
     when(f1_do_redirect){
@@ -526,7 +514,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       f1_lastbr.br_cfi_idx := f1_redirect_idx
       f1_lastbr.br_target := f1_predicted_target
 
-      // printf("update f1, cycle: %d, br_pc: 0x%x, target: 0x%x\n", debug_cycles.value, s1_vpc, f1_predicted_target)
+      printf("update f1_lastbr, cycle: %d, br_pc: 0x%x, target: 0x%x\n", debug_cycles.value, s1_vpc, f1_predicted_target)
     }
     .otherwise{
       f1_lastbr.valid := false.B
@@ -579,8 +567,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val f2_correct_f1_ghist = s1_ghist =/= f2_predicted_ghist && enableGHistStallRepair.B
 
   //chw: f1 pbits info
-  val f2_pbits_val = f2_bpd_resp.pbits(f2_redirect_idx).valid
-  val f2_pbits     = f2_bpd_resp.pbits(f2_redirect_idx).bits
+  val f2_pbits_val = f2_bpd_resp.preds(f2_redirect_idx).pbits.valid
+  val f2_pbits     = f2_bpd_resp.preds(f2_redirect_idx).pbits.bits
 
   when ((s2_valid && !icache.io.resp.valid) ||
         (s2_valid && icache.io.resp.valid && !f3_ready)) {
@@ -593,9 +581,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_tsrc  := s2_tsrc
     f1_clear := true.B
 
+    //chw: 缓存失效时的处理
     s0_pred_bits := s2_ppc(13, 12)
-    // printf("set so_vpc, cycle: %d, place2, pc: 0x%x\n", debug_cycles.value, s0_vpc)
-    // printf("re exe, cycle: %d, s0_vpc: 0x%x, s2_ppc: 0x%x, pred: %d\n", debug_cycles.value, s0_vpc, s2_ppc, s2_ppc(13, 12))
   } 
   .elsewhen (s2_valid && f3_ready) {
     when (s1_valid && s1_vpc === f2_predicted_target && !f2_correct_f1_ghist) {
@@ -615,8 +602,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       // printf("set s0_vpc, cycle: %d, place3, pc: 0x%x, redirect: %d\n", debug_cycles.value, s0_vpc, f2_do_redirect)
 
       //s0_pred_bits := s2_ppc(13, 12)
-      s0_pred_bits := Mux(f2_do_redirect && f2_pbits_val, f2_pbits, s2_ppc(13, 12))
-      // printf("s2 set pred bits, cycle: %d, redirect: %d, target: 0x%x, f2_pbits_val: %d, bits: %d, last_pc: 0x%x\n", debug_cycles.value, f2_do_redirect, f2_predicted_target, f2_pbits_val, f2_pbits, bpd.io.resp.f2.pc)
+      s0_pred_bits := Mux(f2_do_redirect && f2_pbits_val, f2_pbits, last_pred_bits)
+      printf("s2 set pred bits, cycle: %d, redirect: %d, br_pc: 0x%x, target: 0x%x, pbits_val: %d, bits: %d\n", debug_cycles.value, f2_do_redirect, bpd.io.resp.f2.pc, f2_predicted_target, f2_pbits_val, f2_pbits)
 
       //chw: btb给出了预测的结果，而不是采用了npc
       when(f2_do_redirect){
@@ -624,7 +611,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
         f2_lastbr.valid := true.B
         f2_lastbr.br_cfi_idx := f2_redirect_idx
         f2_lastbr.br_target := f2_predicted_target
-        // printf("update f2, cycle: %d, br_pc: 0x%x, target: 0x%x\n", debug_cycles.value, s2_vpc, f2_predicted_target)
+        printf("update f2_lastbr, cycle: %d, br_pc: 0x%x, target: 0x%x\n", debug_cycles.value, s2_vpc, f2_predicted_target)
       }
       .otherwise{
         f2_lastbr.valid := false.B
@@ -823,12 +810,10 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
         f3_bpd_resp.io.deq.bits.preds(i).predicted_pc.bits,
         brsigs.target)
 
-      // printf("f3_targets, cycle: %d, resp: 0x%x, %d, targt: 0x%x, jalr: %d\n", debug_cycles.value, f3_bpd_resp.io.deq.bits.preds(i).predicted_pc.bits, f3_bpd_resp.io.deq.bits.preds(i).predicted_pc.valid, brsigs.target, brsigs.cfi_type === CFI_JALR)
       //chw: f3 pbits
       //如果是一条branch指令，并且f3预测无效，则此时应该选择npc，所以pbits_val也设为无效
-      f3_pbits_val(i) := Mux(brsigs.cfi_type === CFI_BR, f3_bpd_resp.io.deq.bits.preds(i).predicted_pc.valid, true.B)
-                             && f3_bpd_resp.io.deq.bits.pbits(i).valid)
-      f3_pbits(i)     := f3_bpd_resp.io.deq.bits.pbits(i).bits
+      f3_pbits_val(i) := Mux(brsigs.cfi_type === CFI_BR, f3_bpd_resp.io.deq.bits.preds(i).predicted_pc.valid, true.B) && f3_bpd_resp.io.deq.bits.preds(i).pbits.valid
+      f3_pbits(i)     := f3_bpd_resp.io.deq.bits.preds(i).pbits.bits
 
       // Flush BTB entries for JALs if we mispredict the target
       f3_btb_mispredicts(i) := (brsigs.cfi_type === CFI_JAL && valid &&
@@ -985,9 +970,9 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       f3_fetch_bundle.fsrc := BSRC_3
 
       //更新pbits
-      //s0_pred_bits := last_pred_bits
+      //chw: use pbits
       s0_pred_bits := Mux(f3_do_redirect && f3_pbits_val_result, f3_pbits_result, last_pred_bits)
-      // printf("s3 set pred bits, cycle: %d, redirect: %d, target: 0x%x, ras: 0x%x, f1_pbits_val: %d, bits: %d, update bits: %d\n", debug_cycles.value, f3_do_redirect, f3_targs(f3_redirect_idx), ras.io.read_addr, f3_pbits_val(f3_redirect_idx), f3_pbits(f3_redirect_idx), s0_pred_bits)
+      printf("s3 set pred bits, cycle: %d, redirect: %d, br_pc: 0x%x, btb: 0x%x, ras: 0x%x, pbits_val: %d, bits: %d\n", debug_cycles.value, f3_do_redirect, f3_fetch_bundle.pc, f3_targs(f3_redirect_idx), ras.io.read_addr, f3_pbits_val_result, f3_pbits_result)
 
       //chw: btb给出了预测的结果，而不是采用了npc
       when(f3_do_redirect){
@@ -996,7 +981,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
         f3_lastbr.br_cfi_idx := f3_redirect_idx
         f3_lastbr.br_target := f3_predicted_target
 
-        // printf("update f3, cycle: %d, br_pc: 0x%x, target: 0x%x\n", debug_cycles.value, RegNext(s2_vpc), f3_predicted_target)
+        printf("update f3_lastbr, cycle: %d, br_pc: 0x%x, target: 0x%x\n", debug_cycles.value, RegNext(s2_vpc), f3_predicted_target)
       }
       .otherwise{
         f3_lastbr.valid := false.B

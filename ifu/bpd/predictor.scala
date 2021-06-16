@@ -25,6 +25,9 @@ class BranchPrediction(implicit p: Parameters) extends BoomBundle()(p)
   val is_jal          = Bool()
   // What is the target of his branch/jump? Do we know the target?
   val predicted_pc    = Valid(UInt(vaddrBitsExtended.W))
+
+  //chw: for pbits
+  val pbits = Valid(UInt(2.W))
 }
 
 // A branch prediction for a entire fetch-width worth of instructions
@@ -39,7 +42,7 @@ class BranchPredictionBundle(implicit p: Parameters) extends BoomBundle()(p)
   val lhist = Output(Vec(nBanks, UInt(localHistoryLength.W)))
 
   //chw: 在bpd的输出中，增加对pbits的预测结果，也是分为f1,f2,f3
-  val pbits = Output(Vec(fetchWidth, Valid(UInt(2.W))))
+  // val pbits = Output(Vec(fetchWidth, Valid(UInt(2.W))))
 }
 
 
@@ -137,9 +140,9 @@ class BranchPredictionBankResponse(implicit p: Parameters) extends BoomBundle()(
   val f2 = Vec(bankWidth, new BranchPrediction)
   val f3 = Vec(bankWidth, new BranchPrediction)
 
-  val f1_pbits = Vec(bankWidth, Valid(UInt(2.W)))
-  val f2_pbits = Vec(bankWidth, Valid(UInt(2.W)))
-  val f3_pbits = Vec(bankWidth, Valid(UInt(2.W)))
+  // val f1_pbits = Vec(bankWidth, Valid(UInt(2.W)))
+  // val f2_pbits = Vec(bankWidth, Valid(UInt(2.W)))
+  // val f3_pbits = Vec(bankWidth, Valid(UInt(2.W)))
 }
 
 abstract class BranchPredictorBank(implicit p: Parameters) extends BoomModule()(p)
@@ -259,7 +262,7 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
 
     banked_predictors(0).io.resp_in(0)           := (0.U).asTypeOf(new BranchPredictionBankResponse)
 
-    //chw
+    //chw: for pbits update
     banked_predictors(0).io.pbits_update := io.pbits_update
   } else {
     require(nBanks == 2)
@@ -329,9 +332,9 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
     //   printf("predictor set f3, cycle: %d, w: %d, valid: %d, pred_pc: 0x%x, src_pc: 0x%x\n", debug_cycles.value, w.U, banked_predictors(0).io.resp.f3(w).predicted_pc.valid, banked_predictors(0).io.resp.f3(w).predicted_pc.bits, io.resp.f3.pc)
     // }
     
-    io.resp.f1.pbits    := banked_predictors(0).io.resp.f1_pbits
-    io.resp.f2.pbits    := banked_predictors(0).io.resp.f2_pbits
-    io.resp.f3.pbits    := banked_predictors(0).io.resp.f3_pbits
+    // io.resp.f1.pbits    := banked_predictors(0).io.resp.f1_pbits
+    // io.resp.f2.pbits    := banked_predictors(0).io.resp.f2_pbits
+    // io.resp.f3.pbits    := banked_predictors(0).io.resp.f3_pbits
     
     io.resp.f3.meta(0)  := banked_predictors(0).io.f3_meta
     io.resp.f3.lhist(0) := banked_lhist_providers(0).io.f3_lhist
@@ -362,16 +365,16 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
         io.resp.f1.preds(i)           := banked_predictors(0).io.resp.f1(i)
         io.resp.f1.preds(i+bankWidth) := banked_predictors(1).io.resp.f1(i)
         
-        io.resp.f1.pbits(i)           := banked_predictors(0).io.resp.f1_pbits(i)
-        io.resp.f1.pbits(i+bankWidth) := banked_predictors(1).io.resp.f1_pbits(i)
+        // io.resp.f1.pbits(i)           := banked_predictors(0).io.resp.f1_pbits(i)
+        // io.resp.f1.pbits(i+bankWidth) := banked_predictors(1).io.resp.f1_pbits(i)
       }
     } .otherwise {
       for (i <- 0 until bankWidth) {
         io.resp.f1.preds(i)           := banked_predictors(1).io.resp.f1(i)
         io.resp.f1.preds(i+bankWidth) := banked_predictors(0).io.resp.f1(i)
 
-        io.resp.f1.pbits(i)           := banked_predictors(1).io.resp.f1_pbits(i)
-        io.resp.f1.pbits(i+bankWidth) := banked_predictors(0).io.resp.f1_pbits(i)
+        // io.resp.f1.pbits(i)           := banked_predictors(1).io.resp.f1_pbits(i)
+        // io.resp.f1.pbits(i+bankWidth) := banked_predictors(0).io.resp.f1_pbits(i)
       }
     }
 
@@ -380,16 +383,16 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
         io.resp.f2.preds(i)           := banked_predictors(0).io.resp.f2(i)
         io.resp.f2.preds(i+bankWidth) := banked_predictors(1).io.resp.f2(i)
 
-        io.resp.f2.pbits(i)           := banked_predictors(0).io.resp.f2_pbits(i)
-        io.resp.f2.pbits(i+bankWidth) := banked_predictors(1).io.resp.f2_pbits(i)
+        // io.resp.f2.pbits(i)           := banked_predictors(0).io.resp.f2_pbits(i)
+        // io.resp.f2.pbits(i+bankWidth) := banked_predictors(1).io.resp.f2_pbits(i)
       }
     } .otherwise {
       for (i <- 0 until bankWidth) {
         io.resp.f2.preds(i)           := banked_predictors(1).io.resp.f2(i)
         io.resp.f2.preds(i+bankWidth) := banked_predictors(0).io.resp.f2(i)
 
-        io.resp.f2.pbits(i)           := banked_predictors(1).io.resp.f2_pbits(i)
-        io.resp.f2.pbits(i+bankWidth) := banked_predictors(0).io.resp.f2_pbits(i)
+        // io.resp.f2.pbits(i)           := banked_predictors(1).io.resp.f2_pbits(i)
+        // io.resp.f2.pbits(i+bankWidth) := banked_predictors(0).io.resp.f2_pbits(i)
       }
     }
 
@@ -398,16 +401,16 @@ class BranchPredictor(implicit p: Parameters) extends BoomModule()(p)
         io.resp.f3.preds(i)           := banked_predictors(0).io.resp.f3(i)
         io.resp.f3.preds(i+bankWidth) := banked_predictors(1).io.resp.f3(i)
 
-        io.resp.f3.pbits(i)           := banked_predictors(0).io.resp.f3_pbits(i)
-        io.resp.f3.pbits(i+bankWidth) := banked_predictors(1).io.resp.f3_pbits(i)
+        // io.resp.f3.pbits(i)           := banked_predictors(0).io.resp.f3_pbits(i)
+        // io.resp.f3.pbits(i+bankWidth) := banked_predictors(1).io.resp.f3_pbits(i)
       }
     } .otherwise {
       for (i <- 0 until bankWidth) {
         io.resp.f3.preds(i)           := banked_predictors(1).io.resp.f3(i)
         io.resp.f3.preds(i+bankWidth) := banked_predictors(0).io.resp.f3(i)
 
-        io.resp.f3.pbits(i)           := banked_predictors(1).io.resp.f3_pbits(i)
-        io.resp.f3.pbits(i+bankWidth) := banked_predictors(0).io.resp.f3_pbits(i)
+        // io.resp.f3.pbits(i)           := banked_predictors(1).io.resp.f3_pbits(i)
+        // io.resp.f3.pbits(i+bankWidth) := banked_predictors(0).io.resp.f3_pbits(i)
       }
     }
   }

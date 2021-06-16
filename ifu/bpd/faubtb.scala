@@ -118,9 +118,9 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
     io.resp.f1(w).is_jal       := s1_is_jal(w)
     io.resp.f1(w).taken        := s1_taken(w)
 
-    //when(s1_hits(w)){
-      // printf("faubtb s1_resp, cycle: %d, w: %d, valid: %d, hit: %d, pc: 0x%x, target pc: 0x%x\n", debug_cycles.value, w.U, s1_resp(w).valid, s1_hits(w), s1_idx << 3.U, s1_resp(w).bits)
-    //}
+    //chw: pred pbits in faubtb
+    io.resp.f1(w).pbits.valid := Mux(pbits_valid(s1_hit_ways(w))(w) === 1.U, true.B, false.B)
+    io.resp.f1(w).pbits.bits := pbits(s1_hit_ways(w))(w)
 
     io.resp.f2(w) := RegNext(io.resp.f1(w))
     io.resp.f3(w) := RegNext(io.resp.f2(w))
@@ -186,25 +186,25 @@ class FAMicroBTBBranchPredictorBank(params: BoomFAMicroBTBParams = BoomFAMicroBT
   }
 
   //chw: update pred_bits info
-  for (w <- 0 until bankWidth) {
-    io.resp.f1_pbits(w).valid := Mux(pbits_valid(s1_hit_ways(w))(w) === 1.U, true.B, false.B)
-    io.resp.f1_pbits(w).bits := pbits(s1_hit_ways(w))(w)
-    // when(s1_hits(w)){
-    // printf("faubtb pbits, cycle: %d, pc: 0x%x, w: %d, hit: %d, pbit_valid: %d, bits: %d\n", debug_cycles.value, s1_idx << 3.U, w.U, s1_hits(w), io.resp.f1_pbits(w).valid, io.resp.f1_pbits(w).bits)
-    // }
-  }
+  // for (w <- 0 until bankWidth) {
+  //   io.resp.f1_pbits(w).valid := Mux(pbits_valid(s1_hit_ways(w))(w) === 1.U, true.B, false.B)
+  //   io.resp.f1_pbits(w).bits := pbits(s1_hit_ways(w))(w)
+  //   // when(s1_hits(w)){
+  //   // printf("faubtb pbits, cycle: %d, pc: 0x%x, w: %d, hit: %d, pbit_valid: %d, bits: %d\n", debug_cycles.value, s1_idx << 3.U, w.U, s1_hits(w), io.resp.f1_pbits(w).valid, io.resp.f1_pbits(w).bits)
+  //   // }
+  // }
 
-  //chw: update fx_hit_info
-  io.resp.f2_pbits := RegNext(io.resp.f1_pbits)
-  io.resp.f3_pbits := RegNext(io.resp.f2_pbits)
+  // //chw: update fx_hit_info
+  // io.resp.f2_pbits := RegNext(io.resp.f1_pbits)
+  // io.resp.f3_pbits := RegNext(io.resp.f2_pbits)
 
 
   //chw: 在地址转换完成之后，更新对应btb表项中的pred位
   val update_pc = fetchIdx(io.pbits_update.bits.pc)
-  // when(io.pbits_update.valid){
-  //   printf("faubtb update pbits, cycle: %d, update pc: 0x%x, | h1 valid: %d, pc: 0x%x | h2 valid: %d, pc: 0x%x | h3 valid: %d, pc: 0x%x\n", debug_cycles.value,
-  //     update_pc << 3.U, hitinfo1.valid, hitinfo1.pc << 3.U, hitinfo2.valid, hitinfo2.pc << 3.U, hitinfo3.valid, hitinfo3.pc << 3.U)
-  // }
+  when(io.pbits_update.valid){
+    printf("faubtb update pbits, cycle: %d, update pc: 0x%x, | h1 valid: %d, pc: 0x%x | h2 valid: %d, pc: 0x%x | h3 valid: %d, pc: 0x%x\n", debug_cycles.value,
+      update_pc << 3.U, hitinfo1.valid, hitinfo1.pc << 3.U, hitinfo2.valid, hitinfo2.pc << 3.U, hitinfo3.valid, hitinfo3.pc << 3.U)
+  }
   when(io.pbits_update.valid && (update_pc === hitinfo1.pc) && hitinfo1.valid){//有效，并且需要更新faubtb
     pbits_valid(hitinfo1.way)(io.pbits_update.bits.cfi_idx) := 1.U
     pbits(hitinfo1.way)(io.pbits_update.bits.cfi_idx) := io.pbits_update.bits.pbits
