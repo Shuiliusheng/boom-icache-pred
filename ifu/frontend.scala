@@ -930,8 +930,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     nextFetch(f3_fetch_bundle.pc)
   )
 
-  val f3_pbits_val_result = Mux(f3_fetch_bundle.cfi_is_ret && useBPD.B && useRAS.B, false.B, f3_pbits_val(f3_redirect_idx))
-  val f3_pbits_result = f3_pbits(f3_redirect_idx)
+  val f3_pbits_val_result = Mux(f3_fetch_bundle.cfi_is_ret && useBPD.B && useRAS.B, ras.io.read_pbits_val, f3_pbits_val(f3_redirect_idx))
+  val f3_pbits_result = Mux(f3_fetch_bundle.cfi_is_ret && useBPD.B && useRAS.B, ras.io.read_pbits, f3_pbits(f3_redirect_idx))
 
   f3_fetch_bundle.next_pc       := f3_predicted_target
   val f3_predicted_ghist = f3_fetch_bundle.ghist.update(
@@ -951,6 +951,9 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     f3_fetch_bundle.cfi_npc_plus4, 4.U, 2.U)
   ras.io.write_idx   := WrapInc(f3_fetch_bundle.ghist.ras_idx, nRasEntries)
 
+  //chw: for ras pbits
+  ras.io.write_pbits := RegNext(RegNext(last_pred_bits))
+  ras.io.write_pbits_val := true.B
 
   val f3_correct_f1_ghist = s1_ghist =/= f3_predicted_ghist && enableGHistStallRepair.B
   val f3_correct_f2_ghist = s2_ghist =/= f3_predicted_ghist && enableGHistStallRepair.B
@@ -983,7 +986,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
 
       //更新pbits
       //s0_pred_bits := last_pred_bits
-      s0_pred_bits := Mux(f3_do_redirect && f3_pbits_val(f3_redirect_idx), f3_pbits(f3_redirect_idx), last_pred_bits)
+      s0_pred_bits := Mux(f3_do_redirect && f3_pbits_val_result, f3_pbits_result, last_pred_bits)
       // printf("s3 set pred bits, cycle: %d, redirect: %d, target: 0x%x, ras: 0x%x, f1_pbits_val: %d, bits: %d, update bits: %d\n", debug_cycles.value, f3_do_redirect, f3_targs(f3_redirect_idx), ras.io.read_addr, f3_pbits_val(f3_redirect_idx), f3_pbits(f3_redirect_idx), s0_pred_bits)
 
       //chw: btb给出了预测的结果，而不是采用了npc
@@ -1097,6 +1100,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     ras.io.write_valid := true.B
     ras.io.write_idx   := ftq.io.ras_update_idx
     ras.io.write_addr  := ftq.io.ras_update_pc
+    //chw: for ras pbits
+    ras.io.write_pbits_val := true.B
   }
 
 
